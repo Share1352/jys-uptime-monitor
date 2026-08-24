@@ -1,1 +1,20 @@
-{"down":{}}
+{
+  "down": {
+    "site-teacher-route-forwards": {
+      "since": "2026-08-24T17:00:16.130Z",
+      "lastNotifiedAt": "2026-08-24T17:00:16.130Z",
+      "error": "attempt 1: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200 | attempt 2: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200 | attempt 3: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200"
+    },
+    "student-canary-full-access": {
+      "since": "2026-08-24T17:00:16.130Z",
+      "lastNotifiedAt": "2026-08-24T17:00:16.130Z",
+      "error": "attempt 1: This operation was aborted | attempt 2: This operation was aborted | attempt 3: This operation was aborted"
+    }
+  },
+  "updatedAt": "2026-08-24T17:00:16.130Z",
+  "lastRun": {
+    "checkedAt": "2026-08-24T16:57:49.032Z",
+    "total": 24,
+    "failed": 2
+  }
+}
