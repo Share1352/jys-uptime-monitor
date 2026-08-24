@@ -6,9 +6,9 @@
       "error": "attempt 1: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200 | attempt 2: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200 | attempt 3: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200"
     }
   },
-  "updatedAt": "2026-08-24T17:59:03.092Z",
+  "updatedAt": "2026-08-24T18:41:06.790Z",
   "lastRun": {
-    "checkedAt": "2026-08-24T17:58:33.477Z",
+    "checkedAt": "2026-08-24T18:39:27.020Z",
     "total": 24,
     "failed": 1
   }
