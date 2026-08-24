@@ -1,15 +1,9 @@
 {
-  "down": {
-    "site-teacher-route-forwards": {
-      "since": "2026-08-24T17:00:16.130Z",
-      "lastNotifiedAt": "2026-08-24T17:00:16.130Z",
-      "error": "attempt 1: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200 | attempt 2: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200 | attempt 3: expected a redirect to https://app.jysenglish.com/teacher/, got HTTP 200"
-    }
-  },
-  "updatedAt": "2026-08-24T19:23:31.292Z",
+  "down": {},
+  "updatedAt": "2026-08-24T19:38:20.589Z",
   "lastRun": {
-    "checkedAt": "2026-08-24T19:23:01.976Z",
+    "checkedAt": "2026-08-24T19:38:02.047Z",
     "total": 24,
-    "failed": 1
+    "failed": 0
   }
 }
