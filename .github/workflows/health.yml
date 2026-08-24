@@ -31,9 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -48,6 +48,12 @@ jobs:
           set +e
           node scripts/health.mjs | tee health-output.txt
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      # Two runs in the same window would otherwise both read a stale state file
+      # and both report the same outage as new. This cost a duplicate alert on
+      # 2026-08-24.
+      - name: Take the newest known state before deciding
+        run: git pull --rebase --autostash
 
       - name: Email the owner when something changed
         id: notify
@@ -75,7 +81,7 @@ jobs:
 
       - name: Open or update the outage issue
         if: steps.health.outputs.exit_code != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
@@ -104,7 +110,7 @@ jobs:
 
       - name: Close the outage issue after a clean run
         if: steps.health.outputs.exit_code == '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:

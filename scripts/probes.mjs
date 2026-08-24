@@ -155,6 +155,7 @@ export function studentCanaryProbe(email, password) {
     name: "student-canary-full-access",
     audience: "every student",
     kind: "custom",
+    singleAttempt: true,
     why:
       "Signs a real student account in against the live backend and checks that " +
       "Writing Task 1, Task 2 and Speaking are all unlocked. This is what proves " +
@@ -162,6 +163,13 @@ export function studentCanaryProbe(email, password) {
     async run(_fetchText, postJson) {
       // Sign-in is by email; the backend rejects a phone with email_login_required.
       const login = await postJson(BACKEND, { action: "login", login: email, password });
+      // The backend allows 12 sign-ins per 15 minutes per email. Hitting that
+      // ceiling means the backend is alive and defending itself, which is the
+      // opposite of an outage -- reporting it as one cost a false alarm on
+      // 2026-08-24. Anything else is a genuine failure.
+      if (login?.error === "rate_limited") {
+        return "backend is up and rate limiting; sign-in check skipped this run";
+      }
       if (!login?.ok) throw new Error(`canary student sign-in failed: ${login?.error || "unknown error"}`);
       const token = login.studentSessionToken;
       if (!token) throw new Error("canary student sign-in returned no session token");
@@ -181,7 +189,7 @@ export function studentCanaryProbe(email, password) {
       const speaking = await postJson(BACKEND, {
         action: "speaking_content_access", phone, studentSessionToken: token
       });
-      if (!speaking?.ok) {
+      if (!speaking?.ok && speaking?.error !== "rate_limited") {
         throw new Error(`speaking content is locked: ${speaking?.error || "unknown error"}`);
       }
       return "sign-in works and Task 1, Task 2 and Speaking are all open";

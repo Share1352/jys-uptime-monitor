@@ -99,7 +99,10 @@ async function runProbe(probe) {
 // is reported, so the owner's inbox stays believable.
 async function withRetry(probe) {
   const errors = [];
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+  // The sign-in probe is deliberately single-attempt: the backend allows only
+  // 12 sign-ins per 15 minutes per email, and retrying is what exhausts that.
+  const attemptLimit = probe.singleAttempt ? 1 : ATTEMPTS;
+  for (let attempt = 1; attempt <= attemptLimit; attempt++) {
     try {
       const detail = await runProbe(probe);
       return { name: probe.name, audience: probe.audience, ok: true, attempts: attempt, detail: detail || "ok" };
@@ -112,7 +115,7 @@ async function withRetry(probe) {
     name: probe.name,
     audience: probe.audience,
     ok: false,
-    attempts: ATTEMPTS,
+    attempts: attemptLimit,
     why: probe.why,
     url: probe.url || "",
     error: errors.join(" | ")
