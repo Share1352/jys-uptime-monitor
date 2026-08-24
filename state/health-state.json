@@ -1,15 +1,9 @@
 {
-  "down": {
-    "student-canary-full-access": {
-      "since": "2026-08-24T22:17:01.577Z",
-      "lastNotifiedAt": "2026-08-24T22:17:01.577Z",
-      "error": "attempt 1: This operation was aborted"
-    }
-  },
-  "updatedAt": "2026-08-24T22:17:01.577Z",
+  "down": {},
+  "updatedAt": "2026-08-24T22:50:53.686Z",
   "lastRun": {
-    "checkedAt": "2026-08-24T22:16:03.868Z",
+    "checkedAt": "2026-08-24T22:50:30.749Z",
     "total": 24,
-    "failed": 1
+    "failed": 0
   }
 }
