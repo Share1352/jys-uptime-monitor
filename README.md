@@ -1,11 +1,88 @@
 # jys-uptime-monitor
 
-Cloud keep-warm pinger for JYS apps.
+The watchdog for every JYS student and teacher app.
 
-**Why this exists:** GitHub Actions minutes are metered on *private* repos (3,000 free/mo, shared across all private repos). This repo is **public**, so its Actions minutes are **unlimited and free** and never touch that cap.
+**Why this repo is public:** GitHub Actions minutes are metered on *private*
+repos, and the JYS account is currently over its limit — every job on every
+private JYS repo dies in three seconds with *"recent account payments have
+failed or your spending limit needs to be increased"*. A public repo's minutes
+are unlimited and free. A watchdog that lives inside the thing it watches goes
+down with it, so it lives here instead.
 
-`.github/workflows/ping.yml` pings `https://role-rush.jysenglish.com/api/health` every ~10 min so the free Render backend never spins down (no ~60s cold start for the first student). It runs entirely on GitHub's cloud runners — no local machine involved.
+Nothing secret is stored in this repository. The credentials the checks need
+are GitHub Actions secrets, and none of them can read student work.
 
-A once-a-day `heartbeat` commit keeps the scheduled workflow from being auto-disabled after 60 days of repo inactivity.
+## What runs
 
-To add more apps to keep warm, add another `curl` line in the workflow.
+| Workflow | Schedule | What it does |
+| --- | --- | --- |
+| `.github/workflows/health.yml` | every 15 min | Probes every student and teacher surface. Emails jyslearn@gmail.com when something changes. |
+| `.github/workflows/ping.yml` | every 10 min | Keeps the free Render backend behind Role Rush warm so the first student of the day does not wait for a cold start. |
+
+## What is checked
+
+`scripts/probes.mjs` is the list. A probe is never just "did it return 200" — a
+GitHub Pages site that has lost its build still answers 200 with a 404 page, a
+Wix route that has lost its embed still answers 200 with an empty shell, and
+Apps Script answers 200 with an HTML echo page when it is unhappy. Every probe
+names something that can only be there when the surface actually works.
+
+Covered:
+
+- **Student entry:** `www.jysenglish.com/study`, the `app.jysenglish.com`
+  gateway and its `/study/` wrapper, and the study hub app itself.
+- **The five skills plus flashcards:** writing, speaking, pronunciation,
+  reading, listening, flashcard maker — and the flashcard bundle the shell
+  loads.
+- **Writing data bundles:** the Task 1, Task 2 and guided-practice banks, which
+  load lazily and would otherwise only fail after a student had already signed
+  in and picked a task.
+- **Exam integrity:** model answers must not appear in the public bundles.
+- **Teacher surfaces:** the gateway dashboard entry, the dashboard's own
+  sign-in form, `www.jysenglish.com/teacher`, and the `_functions` route the
+  published Wix page sends teachers to.
+- **Backends:** the Apps Script backend behind sign-in, marking and progress;
+  the teacher sign-in route (probed with a deliberately wrong password, so no
+  teacher credential is stored anywhere); the Role Rush Render backend; the HR
+  route.
+- **A real student sign-in.** The canary account signs in against the live
+  backend every run and checks that Writing Task 1, Writing Task 2 and Speaking
+  are all unlocked. This is the check that proves students can do the work,
+  rather than proving a page loaded.
+
+## The alert email
+
+`scripts/notify.mjs` mails **jyslearn@gmail.com** through the writing backend's
+`system_alert` route. The email names what broke, who it hits, the address, how
+long it has been down, why it matters, and exactly what the check saw.
+
+Mail is sent on a **change of state**, not on every run: once when something
+breaks, once every six hours while it stays broken, and once when it comes
+back. `state/health-state.json` is what makes that possible, and the workflow
+commits it. A GitHub issue labelled `outage` is opened and closed alongside, as
+a second channel for the case where mail itself is what is broken.
+
+## Secrets
+
+| Secret | What it is |
+| --- | --- |
+| `ALERT_BACKEND_URL` | The writing backend `/exec` URL that hosts `system_alert`. |
+| `ALERT_SHARED_SECRET` | Authenticates the alert. It can do exactly one thing: send mail to jyslearn@gmail.com. |
+| `CANARY_STUDENT_EMAIL` | The monitoring student account's sign-in email. |
+| `CANARY_STUDENT_PASSWORD` | Its password. |
+
+The canary is a real student row named **"ZZZ Uptime Canary (do not delete)"**
+in class **ZZZ SYSTEM MONITORING**. It exists only to be signed in by the
+monitor. Deleting it does not break the apps, but it does blind the one check
+that proves students can get in.
+
+## Running it by hand
+
+```bash
+node scripts/health.mjs            # exit 0 = everything up, 1 = something is down
+```
+
+Without `CANARY_STUDENT_EMAIL` / `CANARY_STUDENT_PASSWORD` it skips the
+sign-in probe and checks the public surfaces only. Without `ALERT_BACKEND_URL`
+/ `ALERT_SHARED_SECRET`, `scripts/notify.mjs` prints the email it would have
+sent instead of sending it.

@@ -1,0 +1,128 @@
+name: JYS health check
+
+# Every student and teacher surface, every 15 minutes, from GitHub's cloud.
+#
+# This repo is public on purpose: Actions minutes are unlimited and free here,
+# and they never touch the private-repo cap. The private JYS repos cannot run
+# Actions at all right now (account billing), which is exactly why the watchdog
+# has to live outside them.
+#
+# On a change of state the run emails jyslearn@gmail.com through the writing
+# backend's system_alert route, naming what broke and why. It also keeps a
+# single GitHub issue open for as long as anything is down, as a second channel
+# in case mail is the thing that is broken.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # commits the state file that makes alerts change-driven
+  issues: write
+
+concurrency:
+  group: jys-health-check
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe every JYS app
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run the health check
+        id: health
+        continue-on-error: true
+        env:
+          HEALTH_SUMMARY_FILE: health-summary.json
+          CANARY_STUDENT_EMAIL: ${{ secrets.CANARY_STUDENT_EMAIL }}
+          CANARY_STUDENT_PASSWORD: ${{ secrets.CANARY_STUDENT_PASSWORD }}
+        run: |
+          set +e
+          node scripts/health.mjs | tee health-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Email the owner when something changed
+        id: notify
+        env:
+          HEALTH_SUMMARY_FILE: health-summary.json
+          HEALTH_STATE_FILE: state/health-state.json
+          ALERT_BACKEND_URL: ${{ secrets.ALERT_BACKEND_URL }}
+          ALERT_SHARED_SECRET: ${{ secrets.ALERT_SHARED_SECRET }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/notify.mjs
+
+      - name: Remember what is down
+        run: |
+          if git diff --quiet -- state/health-state.json; then
+            echo "State unchanged."
+            exit 0
+          fi
+          git config user.name "uptime-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/health-state.json
+          git commit -m "chore: health state $(date -u +%FT%TZ) [skip ci]"
+          # Another 15-minute run may have pushed first; rebase rather than fail.
+          git pull --rebase --autostash
+          git push
+
+      - name: Open or update the outage issue
+        if: steps.health.outputs.exit_code != '0'
+        uses: actions/github-script@v7
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('health-output.txt', 'utf8')
+              .split('\n').filter((line) => !line.startsWith('::HEALTH_JSON::')).join('\n').trim();
+            const title = 'A JYS app is down';
+            const body = [
+              'The scheduled health check failed. Opened and closed automatically.',
+              '', '```', output, '```', '', `Run: ${process.env.RUN_URL}`
+            ].join('\n');
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: 'outage'
+            });
+            const existing = open.find((issue) => issue.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, body, labels: ['outage']
+              });
+            }
+
+      - name: Close the outage issue after a clean run
+        if: steps.health.outputs.exit_code == '0'
+        uses: actions/github-script@v7
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const title = 'A JYS app is down';
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: 'outage'
+            });
+            const existing = open.find((issue) => issue.title === title);
+            if (!existing) return;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number,
+              body: `Every check passed again. Closing.\n\nRun: ${process.env.RUN_URL}`
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, state: 'closed'
+            });
+
+      - name: Fail the run when something is down
+        if: steps.health.outputs.exit_code != '0'
+        run: exit 1
