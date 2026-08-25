@@ -1,29 +1,25 @@
 name: JYS health check
 
-# Every student and teacher surface, every 15 minutes, from GitHub's cloud.
-#
-# This repo is public on purpose: Actions minutes are unlimited and free here,
-# and they never touch the private-repo cap. The private JYS repos cannot run
-# Actions at all right now (account billing), which is exactly why the watchdog
-# has to live outside them.
+# Every student and teacher surface, every 30 minutes, from GitHub's cloud.
+# This is the single central uptime watchdog; duplicate per-app health Actions
+# have been removed from the application repositories.
 #
 # On a change of state the run emails jyslearn@gmail.com through the writing
 # backend's system_alert route, naming what broke and why. It also keeps a
-# single GitHub issue open for as long as anything is down, as a second channel
-# in case mail is the thing that is broken.
+# single GitHub issue open for as long as anything is down.
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '7,37 * * * *'
   workflow_dispatch: {}
 
 permissions:
-  contents: write   # commits the state file that makes alerts change-driven
+  contents: write
   issues: write
 
 concurrency:
   group: jys-health-check
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   probe:
@@ -49,9 +45,6 @@ jobs:
           node scripts/health.mjs | tee health-output.txt
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
-      # Two runs in the same window would otherwise both read a stale state file
-      # and both report the same outage as new. This cost a duplicate alert on
-      # 2026-08-24.
       - name: Take the newest known state before deciding
         run: git pull --rebase --autostash
 
@@ -75,7 +68,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add state/health-state.json
           git commit -m "chore: health state $(date -u +%FT%TZ) [skip ci]"
-          # Another 15-minute run may have pushed first; rebase rather than fail.
           git pull --rebase --autostash
           git push
 
