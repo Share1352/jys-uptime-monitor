@@ -1,15 +1,9 @@
 {
-  "down": {
-    "teacher-login-endpoint": {
-      "since": "2026-09-01T14:50:53.928Z",
-      "lastNotifiedAt": "2026-09-01T14:50:53.928Z",
-      "error": "attempt 1: This operation was aborted | attempt 2: This operation was aborted | attempt 3: This operation was aborted"
-    }
-  },
-  "updatedAt": "2026-09-01T14:50:53.928Z",
+  "down": {},
+  "updatedAt": "2026-09-01T18:26:48.629Z",
   "lastRun": {
-    "checkedAt": "2026-09-01T14:48:48.990Z",
+    "checkedAt": "2026-09-01T18:25:48.095Z",
     "total": 24,
-    "failed": 1
+    "failed": 0
   }
 }
