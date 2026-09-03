@@ -1,9 +1,11 @@
 {
   "down": {},
-  "updatedAt": "2026-09-03T20:57:52.144Z",
+  "updatedAt": "2026-09-03T22:08:35.275Z",
   "lastRun": {
-    "checkedAt": "2026-09-03T20:57:05.324Z",
+    "checkedAt": "2026-09-03T22:07:04.077Z",
     "total": 24,
-    "failed": 0
-  }
+    "failed": 0,
+    "inconclusive": 0
+  },
+  "unjudged": {}
 }
