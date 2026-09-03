@@ -153,6 +153,43 @@ export const PROBES = [
       return "healthy";
     } },
 
+  // The daily management report has one lane: Cloud Scheduler calls the bridge,
+  // and the GitHub recovery slots that used to back it up were deleted on
+  // 2026-08-25. Nothing outside the pipeline noticed a day that produced no
+  // report, so both times it stopped -- a read-only filesystem, then a stretch
+  // of deterministic fallbacks -- it was found by reading logs by hand.
+  //
+  // /report-freshness is read-only and carries no report content: a date, a
+  // kind, a model name and an age. A deterministic fallback does not count as
+  // healthy, which is the case worth catching: the pipeline "succeeds" every
+  // night and produces nothing anyone can use.
+  { name: "daily-report-freshness", audience: "the owner's daily management report", kind: "custom",
+    timeoutMs: 60_000,
+    why:
+      "The nightly JYS management report. One scheduler lane, no fallback, so a " +
+      "silent stop is invisible unless something outside the pipeline asks.",
+    async run(fetchText) {
+      const { status, body } = await fetchText(
+        "https://jys-zalo-ai-bridge-ridhd46i7a-as.a.run.app/report-freshness");
+      // 503 means the bridge could not read the workbook. That is the bridge
+      // being unwell, which backend-ping and this probe's own failure already
+      // cover; it is not proof that a report is missing, so say which it is.
+      if (status !== 200) throw new Error(`report freshness check returned HTTP ${status}: ${String(body).slice(0, 160)}`);
+      let payload;
+      try { payload = JSON.parse(body); }
+      catch { throw new Error(`report freshness returned non-JSON: ${String(body).slice(0, 160)}`); }
+      if (!payload || payload.ok !== true) {
+        throw new Error(`report freshness was not ok: ${String(body).slice(0, 160)}`);
+      }
+      if (!payload.found) throw new Error("no healthy management report has ever been written");
+      if (payload.stale) {
+        throw new Error(
+          `the newest healthy report is ${payload.reportDate} (${payload.ageHours}h old, ` +
+          `stale after ${payload.staleAfterHours}h)`);
+      }
+      return `latest healthy report ${payload.reportDate} via ${payload.model}, ${payload.ageHours}h old`;
+    } },
+
   { name: "site-hr-route", audience: "staff", kind: "html",
     url: `${SITE}/hr`, minBytes: 50_000, must: [/JYS/i],
     why: "The HR app route." }

@@ -50,6 +50,20 @@ Covered:
   are all unlocked. This is the check that proves students can do the work,
   rather than proving a page loaded.
 
+## Watching the daily management report
+
+`daily-report-freshness` asks the JYS Zalo AI bridge, from outside the report
+pipeline, when it last produced a healthy management report. Since the GitHub
+recovery slots were deleted on 2026-08-25 the report has one Cloud Scheduler
+lane and no fallback, and both times it stopped silently it was found by reading
+logs by hand.
+
+The probe fails when the newest healthy report is more than 30 hours old, and a
+deterministic fallback does not count as healthy: that is the case worth
+catching, because the pipeline "succeeds" every night and produces nothing
+anyone can use. A bridge that cannot read the workbook reports that instead, so
+a sheet problem is never announced as a missing report.
+
 ## The alert email
 
 `scripts/notify.mjs` mails **jyslearn@gmail.com** through the writing backend's
