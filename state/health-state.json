@@ -1,15 +1,9 @@
 {
-  "down": {
-    "role-rush-backend": {
-      "since": "2026-09-03T05:02:02.064Z",
-      "lastNotifiedAt": "2026-09-03T05:02:02.064Z",
-      "error": "attempt 1: This operation was aborted | attempt 2: This operation was aborted | attempt 3: This operation was aborted"
-    }
-  },
-  "updatedAt": "2026-09-03T05:02:02.064Z",
+  "down": {},
+  "updatedAt": "2026-09-03T09:42:05.779Z",
   "lastRun": {
-    "checkedAt": "2026-09-03T05:00:12.558Z",
+    "checkedAt": "2026-09-03T09:41:21.644Z",
     "total": 24,
-    "failed": 1
+    "failed": 0
   }
 }
