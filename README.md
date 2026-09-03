@@ -62,6 +62,30 @@ back. `state/health-state.json` is what makes that possible, and the workflow
 commits it. A GitHub issue labelled `outage` is opened and closed alongside, as
 a second channel for the case where mail itself is what is broken.
 
+### What has to happen before you are told
+
+An alert nobody trusts is worse than no alert, so a failure has to earn the
+email:
+
+- **A failure is confirmed by a second consecutive run.** The first failing run
+  is recorded silently as `unconfirmed`. If the next run passes, the entry is
+  deleted and nothing was ever sent. If it fails again, the email goes out dated
+  from the *first* failure, so the downtime it states is honest.
+- **`model-answers-stay-private` and `student-canary-full-access` are exempt.**
+  They are correctness probes, not availability probes, and a single failure
+  there is worth an immediate alert.
+- **Running out of time is not a failure.** A probe whose every attempt was
+  aborted is reported as `SLOW` and counted, not called down: an abort proves
+  nothing, and a free Render dyno or an Apps Script deployment waking up looks
+  exactly like this. After three consecutive runs with no answer at all it is
+  escalated to an outage anyway.
+- The outage issue and the red workflow run are gated on the same confirmed
+  answer, so a flap does not paint the history red either.
+
+Probes that are known to sleep carry their own timeout instead of the 25s a
+static page is judged on: `role-rush-backend` gets 75s and two attempts 20s
+apart, and the three Apps Script probes get 60s.
+
 ## Secrets
 
 | Secret | What it is |
@@ -80,7 +104,13 @@ that proves students can get in.
 
 ```bash
 node scripts/health.mjs            # exit 0 = everything up, 1 = something is down
+node --test                         # the alerting rules
 ```
+
+`exit 1` means a probe answered *wrong*. A probe that never answered at all
+exits 0 and prints `COULD NOT BE JUDGED`; `HEALTH_TIMEOUT_MS=1
+HEALTH_RETRY_BASE_MS=0 node scripts/health.mjs` forces that condition on
+demand.
 
 Without `CANARY_STUDENT_EMAIL` / `CANARY_STUDENT_PASSWORD` it skips the
 sign-in probe and checks the public surfaces only. Without `ALERT_BACKEND_URL`

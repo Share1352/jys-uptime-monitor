@@ -11,6 +11,10 @@ import { PROBES, studentCanaryProbe } from "./probes.mjs";
 
 const TIMEOUT_MS = Number(process.env.HEALTH_TIMEOUT_MS || 25_000);
 const ATTEMPTS = Number(process.env.HEALTH_ATTEMPTS || 3);
+// Retries used to be 2s and 4s apart, so all three attempts finished inside
+// about six seconds: comfortably inside one Render cold start, which is how a
+// merely-sleeping service produced three identical aborts and an outage email.
+const RETRY_BASE_MS = Number(process.env.HEALTH_RETRY_BASE_MS || 8_000);
 const UA = "jys-uptime-monitor";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -22,9 +26,9 @@ function bust(url) {
   return `${url}${separator}cb=${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function request(url, { method = "GET", redirect = "follow", body } = {}) {
+async function request(url, { method = "GET", redirect = "follow", body, timeoutMs = TIMEOUT_MS } = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
       method,
@@ -46,21 +50,35 @@ async function request(url, { method = "GET", redirect = "follow", body } = {}) 
   }
 }
 
-const fetchText = (url) => request(bust(url));
+// A probe that is known to sleep gets its own budget rather than being judged
+// on the 25s one every fast page uses.
+const budget = (probe) => Number(probe.timeoutMs || TIMEOUT_MS);
+
+const fetchTextFor = (timeoutMs) => (url) => request(bust(url), { timeoutMs });
 
 // Apps Script answers a POST with an HTML echo page often enough that a single
 // non-JSON reply is not evidence of an outage. Parse as text, then retry.
-async function postJson(url, payload) {
+const postJsonFor = (timeoutMs) => async function postJson(url, payload) {
   let last = "";
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const { body } = await request(url, { method: "POST", body: JSON.stringify(payload) });
+    const { body } = await request(url, { method: "POST", body: JSON.stringify(payload), timeoutMs });
     try { return JSON.parse(body); } catch { last = body; await sleep(attempt * 1_500); }
   }
   throw new Error(`Apps Script never answered with JSON. Last reply began: ${last.slice(0, 160)}`);
-}
+};
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+// AbortController fires an AbortError whose message is "This operation was
+// aborted"; undici also raises a TimeoutError/ConnectTimeoutError of its own.
+function isTimeout(error) {
+  const name = String(error?.name || "");
+  const message = String(error?.message || error || "");
+  const cause = String(error?.cause?.code || "");
+  return name === "AbortError" || name === "TimeoutError" ||
+    /aborted|timeout|timed out/i.test(message) || /TIMEOUT/i.test(cause);
 }
 
 function matches(body, needle) {
@@ -68,10 +86,12 @@ function matches(body, needle) {
 }
 
 async function runProbe(probe) {
-  if (probe.kind === "custom") return probe.run(fetchText, postJson);
+  const timeoutMs = budget(probe);
+  const fetchText = fetchTextFor(timeoutMs);
+  if (probe.kind === "custom") return probe.run(fetchText, postJsonFor(timeoutMs));
 
   if (probe.kind === "redirect") {
-    const { status, location } = await request(bust(probe.url), { redirect: "manual" });
+    const { status, location } = await request(bust(probe.url), { redirect: "manual", timeoutMs });
     assert(
       status >= 300 && status < 400,
       `expected a redirect to ${probe.expectLocation}, got HTTP ${status}`
@@ -97,25 +117,36 @@ async function runProbe(probe) {
 
 // One transient blip is not an outage. Only a probe that fails every attempt
 // is reported, so the owner's inbox stays believable.
+//
+// A probe that only ever ran out of time is a third outcome, not a failure. An
+// abort proves nothing: the service may be dead, or it may be a free Render dyno
+// or an Apps Script deployment taking its first-hit minute. Calling that "down"
+// is what put two false "JYS is down" emails in the owner's inbox in nine days.
+// It is reported as "could not be judged" and left for notify.mjs, which
+// escalates a probe that stays unjudgeable run after run.
 async function withRetry(probe) {
   const errors = [];
+  let timedOutEveryAttempt = true;
   // The sign-in probe is deliberately single-attempt: the backend allows only
   // 12 sign-ins per 15 minutes per email, and retrying is what exhausts that.
-  const attemptLimit = probe.singleAttempt ? 1 : ATTEMPTS;
+  const attemptLimit = probe.singleAttempt ? 1 : Number(probe.attempts || ATTEMPTS);
   for (let attempt = 1; attempt <= attemptLimit; attempt++) {
     try {
       const detail = await runProbe(probe);
-      return { name: probe.name, audience: probe.audience, ok: true, attempts: attempt, detail: detail || "ok" };
+      return { name: probe.name, audience: probe.audience, ok: true, outcome: "pass", attempts: attempt, detail: detail || "ok" };
     } catch (error) {
+      if (!isTimeout(error)) timedOutEveryAttempt = false;
       errors.push(`attempt ${attempt}: ${String(error?.message || error)}`);
-      if (attempt < ATTEMPTS) await sleep(attempt * 2_000);
+      if (attempt < attemptLimit) await sleep(Number(probe.retryDelayMs || attempt * RETRY_BASE_MS));
     }
   }
   return {
     name: probe.name,
     audience: probe.audience,
     ok: false,
+    outcome: timedOutEveryAttempt ? "inconclusive" : "fail",
     attempts: attemptLimit,
+    timeoutMs: budget(probe),
     why: probe.why,
     url: probe.url || "",
     error: errors.join(" | ")
@@ -135,17 +166,20 @@ const startedAt = new Date().toISOString();
 const results = [];
 for (const probe of probes) results.push(await withRetry(probe));
 
-const failed = results.filter((result) => !result.ok);
+const failed = results.filter((result) => result.outcome === "fail");
+const unjudged = results.filter((result) => result.outcome === "inconclusive");
 for (const result of results) {
-  console.log(result.ok ? `PASS ${result.name}: ${result.detail}` : `FAIL ${result.name}: ${result.error}`);
+  if (result.ok) console.log(`PASS ${result.name}: ${result.detail}`);
+  else if (result.outcome === "inconclusive") console.log(`SLOW ${result.name}: no answer inside ${result.timeoutMs}ms on any attempt, so it could not be judged: ${result.error}`);
+  else console.log(`FAIL ${result.name}: ${result.error}`);
 }
-console.log(
-  failed.length
-    ? `\n${failed.length} of ${results.length} probes FAILED: ${failed.map((r) => r.name).join(", ")}`
-    : `\nAll ${results.length} probes passed.`
-);
+const lines = [];
+if (failed.length) lines.push(`${failed.length} of ${results.length} probes FAILED: ${failed.map((r) => r.name).join(", ")}`);
+if (unjudged.length) lines.push(`${unjudged.length} of ${results.length} probes COULD NOT BE JUDGED (no answer in time, which is not proof of an outage): ${unjudged.map((r) => r.name).join(", ")}`);
+if (!lines.length) lines.push(`All ${results.length} probes passed.`);
+console.log(`\n${lines.join("\n")}`);
 
-const summary = { checkedAt: startedAt, finishedAt: new Date().toISOString(), total: results.length, failed: failed.length, results };
+const summary = { checkedAt: startedAt, finishedAt: new Date().toISOString(), total: results.length, failed: failed.length, inconclusive: unjudged.length, results };
 console.log(`::HEALTH_JSON::${JSON.stringify(summary)}`);
 
 if (process.env.HEALTH_SUMMARY_FILE) {

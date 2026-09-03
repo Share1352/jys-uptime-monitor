@@ -25,7 +25,9 @@ jobs:
   probe:
     name: Probe every JYS app
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The cold-start probes are allowed 60-75s each now, so a run in which
+    # several backends are asleep needs more headroom than 15 minutes.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
@@ -71,8 +73,12 @@ jobs:
           git pull --rebase --autostash
           git push
 
+      # Gated on notify.mjs, not on the health exit code: a probe that failed
+      # once and passes on the next run is a flap, and four such issues were
+      # opened and auto-closed in ten days, every one a false alarm. Only a
+      # failure confirmed by a second consecutive run gets here.
       - name: Open or update the outage issue
-        if: steps.health.outputs.exit_code != '0'
+        if: always() && steps.notify.outputs.confirmed_outage == 'true'
         uses: actions/github-script@v8
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -101,7 +107,7 @@ jobs:
             }
 
       - name: Close the outage issue after a clean run
-        if: steps.health.outputs.exit_code == '0'
+        if: always() && steps.notify.outputs.confirmed_outage == 'false'
         uses: actions/github-script@v8
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -121,6 +127,8 @@ jobs:
               owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, state: 'closed'
             });
 
+      # A single flap must not paint the workflow history red either, so this
+      # asks the same confirmed question the issue and the email do.
       - name: Fail the run when something is down
-        if: steps.health.outputs.exit_code != '0'
+        if: steps.notify.outputs.confirmed_outage == 'true'
         run: exit 1

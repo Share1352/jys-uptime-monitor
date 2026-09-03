@@ -101,7 +101,10 @@ export const PROBES = [
       "If it stops forwarding, /teacher is a dead page for every teacher." },
 
   // ---- backends -------------------------------------------------------------
+  // Apps Script has a slow first hit of its own, so the three backend probes
+  // below get a minute rather than the 25s a static page is judged on.
   { name: "backend-ping", audience: "students and teachers", kind: "custom",
+    timeoutMs: 60_000,
     why: "The Apps Script backend behind sign-in, marking, progress and speaking.",
     async run(fetchText) {
       const { status, body } = await fetchText(`${BACKEND}?action=ping`);
@@ -117,6 +120,7 @@ export const PROBES = [
     } },
 
   { name: "teacher-login-endpoint", audience: "teachers", kind: "custom",
+    timeoutMs: 60_000,
     why:
       "Proves the teacher sign-in path answers, without holding a teacher password " +
       "anywhere. A deliberately wrong password must come back as a clean JSON " +
@@ -134,7 +138,14 @@ export const PROBES = [
       return `rejected with ${payload.error}`;
     } },
 
+  // role-rush.jysenglish.com is a free Render service that spins down and takes
+  // about a minute to wake -- the sibling ping.yml in this repo exists for
+  // exactly that reason. Judging it on the 25s budget every fast page uses meant
+  // three attempts inside one cold window all aborted together and the owner was
+  // emailed that a healthy service was down (2026-09-03). Two attempts, a
+  // cold-start-sized budget, and 20s between them so they cannot share a window.
   { name: "role-rush-backend", audience: "students in speaking games", kind: "custom",
+    timeoutMs: 75_000, attempts: 2, retryDelayMs: 20_000,
     why: "The Render backend behind the Role Rush speaking game.",
     async run(fetchText) {
       const { status } = await fetchText("https://role-rush.jysenglish.com/api/health");
@@ -156,6 +167,7 @@ export function studentCanaryProbe(email, password) {
     audience: "every student",
     kind: "custom",
     singleAttempt: true,
+    timeoutMs: 60_000,
     why:
       "Signs a real student account in against the live backend and checks that " +
       "Writing Task 1, Task 2 and Speaking are all unlocked. This is what proves " +

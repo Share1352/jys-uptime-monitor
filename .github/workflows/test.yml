@@ -1,0 +1,24 @@
+# The alerting rules decide whether the owner is woken up, and nothing ran them.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: node --check scripts/health.mjs
+      - run: node --check scripts/notify.mjs
+      - run: node --check scripts/probes.mjs
+      - run: node --test

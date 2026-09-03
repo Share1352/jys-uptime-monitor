@@ -14,27 +14,79 @@ import fs from "node:fs";
 const SUMMARY_FILE = process.env.HEALTH_SUMMARY_FILE || "health-summary.json";
 const STATE_FILE = process.env.HEALTH_STATE_FILE || "state/health-state.json";
 const REMIND_HOURS = Number(process.env.ALERT_REMIND_HOURS || 6);
+// A probe that fails once and passes on the next run is a flap, not an outage.
+// Four "A JYS app is down" issues were opened and auto-closed between
+// 2026-08-24 and 2026-09-03 and every one of them was a false alarm, so a
+// failure now has to survive a second consecutive run before anyone is told.
+const CONFIRM_RUNS = Number(process.env.ALERT_CONFIRM_RUNS || 2);
+// The two correctness probes are exempt. They do not answer "is it up" but "is
+// a model answer leaking" and "can a real student still reach their work", and
+// a single failure there is worth waking someone for.
+const ALERT_IMMEDIATELY = new Set(
+  (process.env.ALERT_IMMEDIATELY || "model-answers-stay-private,student-canary-full-access")
+    .split(",").map((name) => name.trim()).filter(Boolean)
+);
+// health.mjs reports a probe that only ever ran out of time as "inconclusive"
+// rather than failed, because an abort is not proof of anything. It cannot be
+// ignored forever either: a service that has been unanswerable for this many
+// consecutive runs is treated as down.
+const UNJUDGED_RUNS_BEFORE_OUTAGE = Number(process.env.ALERT_UNJUDGED_RUNS || 3);
 const BACKEND = process.env.ALERT_BACKEND_URL || "";
 const SECRET = process.env.ALERT_SHARED_SECRET || "";
 const RUN_URL = process.env.RUN_URL || "";
 
 const summary = JSON.parse(fs.readFileSync(SUMMARY_FILE, "utf8"));
 
-let state = { down: {} };
+let state = { down: {}, unjudged: {} };
 try { state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch { /* first run */ }
 state.down = state.down || {};
+state.unjudged = state.unjudged || {};
 
 const now = new Date();
-const failing = new Map(summary.results.filter((r) => !r.ok).map((r) => [r.name, r]));
-const passing = summary.results.filter((r) => r.ok).map((r) => r.name);
+const nowIso = now.toISOString();
+// A result without an outcome comes from a health.mjs older than the run that
+// wrote this state file, and its !ok meant "failed".
+const outcomeOf = (result) => result.outcome || (result.ok ? "pass" : "fail");
+const failing = new Map(summary.results.filter((r) => outcomeOf(r) === "fail").map((r) => [r.name, r]));
+const inconclusive = new Map(summary.results.filter((r) => outcomeOf(r) === "inconclusive").map((r) => [r.name, r]));
+const passing = summary.results.filter((r) => outcomeOf(r) === "pass").map((r) => r.name);
+
+// A probe nobody could judge this run. Count the run; once it has been
+// unanswerable long enough, stop giving it the benefit of the doubt and treat
+// it as down, without making it wait out the confirmation window as well.
+for (const [name, result] of inconclusive) {
+  const previous = state.unjudged[name] || { since: nowIso, runs: 0 };
+  previous.runs += 1;
+  previous.error = result.error;
+  state.unjudged[name] = previous;
+  if (previous.runs >= UNJUDGED_RUNS_BEFORE_OUTAGE) {
+    failing.set(name, { ...result, since: previous.since, escalated: true });
+  }
+}
+for (const name of [...passing, ...failing.keys()]) {
+  if (!inconclusive.has(name)) delete state.unjudged[name];
+}
 
 const newlyDown = [];
 const stillDown = [];
+const awaitingConfirmation = [];
 for (const [name, result] of failing) {
   const previous = state.down[name];
   if (!previous) {
-    state.down[name] = { since: now.toISOString(), lastNotifiedAt: null, error: result.error };
-    newlyDown.push(result);
+    // First failing run. Record it, say nothing, and see whether it is still
+    // failing next time -- unless it is a correctness probe or a probe that has
+    // already spent several runs unanswerable, which have waited long enough.
+    const immediate = ALERT_IMMEDIATELY.has(name) || result.escalated === true || CONFIRM_RUNS <= 1;
+    const since = result.since || nowIso;
+    state.down[name] = { since, lastNotifiedAt: null, error: result.error, unconfirmed: !immediate };
+    if (immediate) newlyDown.push({ ...result, since });
+    else awaitingConfirmation.push(result);
+  } else if (previous.unconfirmed) {
+    // Still failing on the next run: this one is real. Report it with the
+    // original `since`, so the downtime the email states stays honest.
+    previous.unconfirmed = false;
+    previous.error = result.error;
+    newlyDown.push({ ...result, since: previous.since });
   } else {
     previous.error = result.error;
     const last = previous.lastNotifiedAt ? new Date(previous.lastNotifiedAt) : null;
@@ -44,11 +96,18 @@ for (const [name, result] of failing) {
 }
 
 const recovered = [];
-for (const name of passing) {
-  if (state.down[name]) {
-    recovered.push({ name, since: state.down[name].since });
-    delete state.down[name];
-  }
+const flapped = [];
+// An inconclusive probe counts as recovery only while it is still being given
+// the benefit of the doubt. Once it has been escalated into `failing` above it
+// is an outage, and must not be deleted from state.down in the same run.
+for (const name of [...passing, ...[...inconclusive.keys()].filter((n) => !failing.has(n))]) {
+  const previous = state.down[name];
+  if (!previous) continue;
+  delete state.down[name];
+  // Nobody was ever told about an unconfirmed failure, so nobody needs to be
+  // told it is over. This is the flap that used to cost an email and an issue.
+  if (previous.unconfirmed) flapped.push({ name, since: previous.since });
+  else recovered.push({ name, since: previous.since });
 }
 
 function since(iso) {
@@ -98,13 +157,39 @@ if (recovered.length) {
 }
 
 state.updatedAt = now.toISOString();
-state.lastRun = { checkedAt: summary.checkedAt, total: summary.total, failed: summary.failed };
+state.lastRun = {
+  checkedAt: summary.checkedAt,
+  total: summary.total,
+  failed: summary.failed,
+  inconclusive: summary.inconclusive ?? inconclusive.size
+};
 fs.mkdirSync(STATE_FILE.replace(/\/[^/]+$/, ""), { recursive: true });
 
-if (!sections.length) {
+// The workflow opens the outage issue and paints itself red on this, not on the
+// health exit code, so a single flap no longer does either.
+const confirmedOutage = Object.values(state.down).some((entry) => !entry.unconfirmed);
+
+function persist(code = 0) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + "\n");
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `confirmed_outage=${confirmedOutage}\n`);
+  }
+  process.exit(code);
+}
+
+for (const result of awaitingConfirmation) {
+  console.log(`HOLDING ${result.name}: first failing run, waiting for the next one before telling anyone. ${result.error}`);
+}
+for (const entry of flapped) {
+  console.log(`FLAP ${entry.name}: failed once at ${entry.since} and is answering again. Nothing was sent.`);
+}
+for (const [name, entry] of Object.entries(state.unjudged)) {
+  console.log(`UNJUDGED ${name}: no answer in time on ${entry.runs} consecutive run(s) since ${entry.since}. Becomes an outage at ${UNJUDGED_RUNS_BEFORE_OUTAGE}.`);
+}
+
+if (!sections.length) {
   console.log(`No change of state. ${summary.total - summary.failed}/${summary.total} probes passing; nothing to send.`);
-  process.exit(0);
+  persist(0);
 }
 
 const body = [
@@ -122,8 +207,7 @@ console.log(`SUBJECT: ${subject}\n\n${body}\n`);
 
 if (!BACKEND || !SECRET) {
   console.log("No alert credentials configured, so nothing was emailed.");
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + "\n");
-  process.exit(0);
+  persist(0);
 }
 
 // Apps Script answers a POST with an HTML echo page often enough that one
@@ -143,10 +227,16 @@ async function post(payload) {
   throw new Error(`alert endpoint never answered with JSON. Last reply began: ${last.slice(0, 160)}`);
 }
 
-const sent = await post({ action: "system_alert", secret: SECRET, subject, body });
+let sent;
+try {
+  sent = await post({ action: "system_alert", secret: SECRET, subject, body });
+} catch (error) {
+  console.error(`Alert email FAILED: ${String(error?.message || error)}`);
+  persist(1);
+}
 if (!sent?.ok) {
   console.error(`Alert email FAILED: ${sent?.error || "unknown error"}`);
-  process.exit(1);
+  persist(1);
 }
 console.log(`Alert email sent at ${sent.sentAt}. Remaining daily mail quota: ${sent.remainingQuota}.`);
 
@@ -154,4 +244,4 @@ const stamp = now.toISOString();
 for (const result of [...newlyDown, ...stillDown]) {
   if (state.down[result.name]) state.down[result.name].lastNotifiedAt = stamp;
 }
-fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + "\n");
+persist(0);
