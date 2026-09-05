@@ -1,0 +1,108 @@
+name: One-time Gemini 3.8 Flash migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-gemini-3-8-migration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Upgrade tracked Gemini 3.6 Flash references
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import subprocess
+
+          repo = os.environ.get('GITHUB_REPOSITORY', '')
+          old_id = 'gemini-' + '3.6-flash'
+          new_id = 'gemini-3.8-flash'
+          old_name = 'Gemini ' + '3.6 Flash'
+          new_name = 'Gemini 3.8 Flash'
+
+          tracked = subprocess.check_output(['git', 'ls-files', '-z']).split(b'\0')
+          changed = []
+          for raw in tracked:
+              if not raw:
+                  continue
+              path = Path(os.fsdecode(raw))
+              try:
+                  text = path.read_text(encoding='utf-8')
+              except (UnicodeDecodeError, OSError):
+                  continue
+              updated = text.replace(old_id, new_id).replace(old_name, new_name)
+              if updated != text:
+                  path.write_text(updated, encoding='utf-8')
+                  changed.append(str(path))
+
+          # Preserve automatic upgrades when a deployment still has an older
+          # externally configured primary model, without keeping the old model ID
+          # hard-coded in the repository.
+          if repo.endswith('/jys-writing-trainer-static'):
+              path = Path('backend/backend.gs')
+              text = path.read_text(encoding='utf-8')
+              old = "  const primary = (!configuredPrimary || configuredPrimary === 'gemini-3.5-flash')\n    ? 'gemini-3.8-flash'\n    : configuredPrimary;"
+              new = "  const legacyStableFlash = /^gemini-3\\.[5-7]-flash$/.test(configuredPrimary);\n  const primary = (!configuredPrimary || legacyStableFlash)\n    ? 'gemini-3.8-flash'\n    : configuredPrimary;"
+              if old not in text:
+                  raise SystemExit('Expected Writing Trainer model-selection block not found')
+              text = text.replace(old, new).replace('to 3.6 without', 'to 3.8 without')
+              path.write_text(text, encoding='utf-8')
+
+          if repo.endswith('/JYS-teacher-submissions'):
+              path = Path('poller/src/ai-review.mjs')
+              text = path.read_text(encoding='utf-8')
+              old = "  .map((value) => value.trim())\n  .filter(Boolean);"
+              new = "  .map((value) => value.trim())\n  .map((value) => /^gemini-3\\.[67]-flash$/.test(value) ? 'gemini-3.8-flash' : value)\n  .filter(Boolean);"
+              if old not in text:
+                  raise SystemExit('Expected teacher-submissions model normalization block not found')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          if repo.endswith('/jys-migration-engine'):
+              path = Path('gemini_runtime.py')
+              text = path.read_text(encoding='utf-8')
+              old = "    models = tuple(dict.fromkeys((primary_model, *fallback_models)))"
+              new = "    primary_model = PRIMARY_MODEL if re.fullmatch(r\"gemini-3\\.[67]-flash\", str(primary_model)) else primary_model\n    fallback_models = tuple(\n        PRIMARY_MODEL if re.fullmatch(r\"gemini-3\\.[67]-flash\", str(model)) else model\n        for model in fallback_models\n    )\n    models = tuple(dict.fromkeys((primary_model, *fallback_models)))"
+              if old not in text:
+                  raise SystemExit('Expected migration-engine model-chain block not found')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # The workflow is one-time only. Remove it from the resulting commit.
+          workflow = Path('.github/workflows/one-time-gemini-3-8-migration.yml')
+          if workflow.exists():
+              workflow.unlink()
+
+          print(f'Updated {len(changed)} tracked file(s) in {repo}.')
+          PY
+
+      - name: Verify no hard-coded Gemini 3.6 Flash model remains
+        shell: bash
+        run: |
+          if git grep -n -- 'gemini-3\.6-flash' -- ':!*.lock'; then
+            echo 'Old Gemini model ID still present.' >&2
+            exit 1
+          fi
+
+      - name: Commit migration
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No migration changes were needed.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'chore: upgrade Gemini 3.6 Flash to 3.8 Flash'
+          git push origin HEAD:main
