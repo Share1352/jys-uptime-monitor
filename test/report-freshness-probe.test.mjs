@@ -27,7 +27,7 @@ test("a fresh report passes and says which one", async () => {
     reportDate: "2026-09-03", model: "gemini-3.8-flash", staleAfterHours: 30,
   }));
   assert.match(detail, /2026-09-03/);
-  assert.match(detail, /gemini-3\.6-flash/);
+  assert.match(detail, /gemini-3\.8-flash/);
 });
 
 test("a stale report fails, and the message says how stale", async () => {
