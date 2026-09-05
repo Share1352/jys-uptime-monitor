@@ -1,17 +1,10 @@
 {
-  "down": {
-    "daily-report-freshness": {
-      "since": "2026-09-05T10:55:07.341Z",
-      "lastNotifiedAt": "2026-09-05T13:51:45.088Z",
-      "error": "attempt 1: the newest healthy report is 2026-09-04 (34.8h old, stale after 30h) | attempt 2: the newest healthy report is 2026-09-04 (34.8h old, stale after 30h) | attempt 3: the newest healthy report is 2026-09-04 (34.8h old, stale after 30h)",
-      "unconfirmed": false
-    }
-  },
-  "updatedAt": "2026-09-05T13:51:45.088Z",
+  "down": {},
+  "updatedAt": "2026-09-05T16:48:19.575Z",
   "lastRun": {
-    "checkedAt": "2026-09-05T13:50:33.517Z",
+    "checkedAt": "2026-09-05T16:47:31.810Z",
     "total": 25,
-    "failed": 1,
+    "failed": 0,
     "inconclusive": 0
   },
   "unjudged": {}
