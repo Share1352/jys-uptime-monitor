@@ -24,7 +24,7 @@ test("the probe exists and is given a cold-start budget", () => {
 test("a fresh report passes and says which one", async () => {
   const detail = await probe.run(fetchTextReturning(200, {
     ok: true, found: true, stale: false, ageHours: 1.2,
-    reportDate: "2026-09-03", model: "gemini-3.6-flash", staleAfterHours: 30,
+    reportDate: "2026-09-03", model: "gemini-3.8-flash", staleAfterHours: 30,
   }));
   assert.match(detail, /2026-09-03/);
   assert.match(detail, /gemini-3\.6-flash/);
@@ -34,7 +34,7 @@ test("a stale report fails, and the message says how stale", async () => {
   await assert.rejects(
     () => probe.run(fetchTextReturning(200, {
       ok: true, found: true, stale: true, ageHours: 51.4,
-      reportDate: "2026-09-01", model: "gemini-3.6-flash", staleAfterHours: 30,
+      reportDate: "2026-09-01", model: "gemini-3.8-flash", staleAfterHours: 30,
     })),
     /newest healthy report is 2026-09-01 \(51\.4h old, stale after 30h\)/,
   );
