@@ -11,9 +11,6 @@ import { PROBES, studentCanaryProbe } from "./probes.mjs";
 
 const TIMEOUT_MS = Number(process.env.HEALTH_TIMEOUT_MS || 25_000);
 const ATTEMPTS = Number(process.env.HEALTH_ATTEMPTS || 3);
-// Retries used to be 2s and 4s apart, so all three attempts finished inside
-// about six seconds: comfortably inside one Render cold start, which is how a
-// merely-sleeping service produced three identical aborts and an outage email.
 const RETRY_BASE_MS = Number(process.env.HEALTH_RETRY_BASE_MS || 8_000);
 const UA = "jys-uptime-monitor";
 
@@ -50,8 +47,6 @@ async function request(url, { method = "GET", redirect = "follow", body, timeout
   }
 }
 
-// A probe that is known to sleep gets its own budget rather than being judged
-// on the 25s one every fast page uses.
 const budget = (probe) => Number(probe.timeoutMs || TIMEOUT_MS);
 
 const fetchTextFor = (timeoutMs) => (url) => request(bust(url), { timeoutMs });
@@ -119,11 +114,9 @@ async function runProbe(probe) {
 // is reported, so the owner's inbox stays believable.
 //
 // A probe that only ever ran out of time is a third outcome, not a failure. An
-// abort proves nothing: the service may be dead, or it may be a free Render dyno
-// or an Apps Script deployment taking its first-hit minute. Calling that "down"
-// is what put two false "JYS is down" emails in the owner's inbox in nine days.
-// It is reported as "could not be judged" and left for notify.mjs, which
-// escalates a probe that stays unjudgeable run after run.
+// abort proves nothing: the service may be dead, or a backend may simply be
+// slow to answer. It is reported as "could not be judged" and left for
+// notify.mjs, which escalates a probe that stays unjudgeable run after run.
 async function withRetry(probe) {
   const errors = [];
   let timedOutEveryAttempt = true;
@@ -153,7 +146,10 @@ async function withRetry(probe) {
   };
 }
 
-const probes = [...PROBES];
+// Role Rush is intentionally excluded so this monitor never wakes its Render
+// backend. The service is allowed to sleep and cold-start only when a real user
+// accesses it.
+const probes = PROBES.filter((probe) => probe.name !== "role-rush-backend");
 const canaryEmail = process.env.CANARY_STUDENT_EMAIL;
 const canaryPassword = process.env.CANARY_STUDENT_PASSWORD;
 if (canaryEmail && canaryPassword) {
